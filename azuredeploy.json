@@ -15,7 +15,10 @@
     },
     "githubRepo": {
       "type": "string",
-      "defaultValue": "LHHRTC/lhh-governance"
+      "defaultValue": "LHHRTC@351218364/lhh-governance@1442227743",
+      "metadata": {
+        "description": "Owner and repository as they appear in GitHub's OIDC subject claim. GitHub includes the immutable owner and repository IDs, so a renamed or recreated repository cannot reuse these credentials."
+      }
     },
     "budgetAmount": {
       "type": "int",
