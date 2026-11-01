@@ -1,0 +1,285 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "LHH Governance one time setup. Creates resource group rg-lhh-governance; a deploy identity usable only by GitHub Actions in LHHRTC/lhh-governance (Contributor on this resource group only); a read only operator identity (Reader and Monitoring Reader on this resource group only); and a $60 monthly budget that emails the subscription owners. No secrets are created."
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "southcentralus"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-lhh-governance"
+    },
+    "githubRepo": {
+      "type": "string",
+      "defaultValue": "LHHRTC/lhh-governance"
+    },
+    "budgetAmount": {
+      "type": "int",
+      "defaultValue": 60
+    },
+    "budgetStartDate": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-01')]"
+    }
+  },
+  "variables": {
+    "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2022-09-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "app": "lhh-governance"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "lhh-deploy-identity",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "githubRepo": {
+            "value": "[parameters('githubRepo')]"
+          },
+          "contributorRoleId": {
+            "value": "[variables('contributorRoleId')]"
+          },
+          "budgetAmount": {
+            "value": "[parameters('budgetAmount')]"
+          },
+          "budgetStartDate": {
+            "value": "[parameters('budgetStartDate')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "githubRepo": {
+              "type": "string"
+            },
+            "contributorRoleId": {
+              "type": "string"
+            },
+            "budgetAmount": {
+              "type": "int"
+            },
+            "budgetStartDate": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "identityName": "id-lhh-governance-deploy",
+            "operatorName": "id-lhh-governance-operator",
+            "readerRoleId": "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+            "monitoringReaderRoleId": "43d0d8ad-25c7-4714-9337-8ba259a9fe05"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('identityName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "app": "lhh-governance"
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}/github-main', variables('identityName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+              ],
+              "properties": {
+                "issuer": "https://token.actions.githubusercontent.com",
+                "subject": "[format('repo:{0}:ref:refs/heads/main', parameters('githubRepo'))]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}/github-test', variables('identityName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials', variables('identityName'), 'github-main')]"
+              ],
+              "properties": {
+                "issuer": "https://token.actions.githubusercontent.com",
+                "subject": "[format('repo:{0}:environment:test', parameters('githubRepo'))]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}/github-production', variables('identityName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials', variables('identityName'), 'github-test')]"
+              ],
+              "properties": {
+                "issuer": "https://token.actions.githubusercontent.com",
+                "subject": "[format('repo:{0}:environment:production', parameters('githubRepo'))]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, variables('identityName'), parameters('contributorRoleId'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+              ],
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('contributorRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "description": "LHH Governance deploys from GitHub Actions; this resource group only"
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('operatorName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "app": "lhh-governance",
+                "role": "operator-read-only"
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}/github-operator', variables('operatorName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName'))]"
+              ],
+              "properties": {
+                "issuer": "https://token.actions.githubusercontent.com",
+                "subject": "[format('repo:{0}:environment:operator', parameters('githubRepo'))]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, variables('operatorName'), variables('readerRoleId'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName'))]"
+              ],
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('readerRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "description": "LHH Governance operator; read only; this resource group only"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, variables('operatorName'), variables('monitoringReaderRoleId'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName'))]"
+              ],
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringReaderRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "description": "LHH Governance operator; read only; this resource group only"
+              }
+            },
+            {
+              "type": "Microsoft.Consumption/budgets",
+              "apiVersion": "2023-05-01",
+              "name": "lhh-monthly",
+              "properties": {
+                "category": "Cost",
+                "amount": "[parameters('budgetAmount')]",
+                "timeGrain": "Monthly",
+                "timePeriod": {
+                  "startDate": "[format('{0}T00:00:00Z', parameters('budgetStartDate'))]"
+                },
+                "notifications": {
+                  "actual80": {
+                    "enabled": true,
+                    "operator": "GreaterThan",
+                    "threshold": 80,
+                    "contactRoles": [
+                      "Owner"
+                    ]
+                  },
+                  "forecast100": {
+                    "enabled": true,
+                    "operator": "GreaterThan",
+                    "threshold": 100,
+                    "thresholdType": "Forecasted",
+                    "contactRoles": [
+                      "Owner"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]"
+            },
+            "operatorClientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('operatorName')), '2023-01-31').clientId]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "AZURE_CLIENT_ID": {
+      "type": "string",
+      "value": "[reference('lhh-deploy-identity').outputs.clientId.value]"
+    },
+    "AZURE_TENANT_ID": {
+      "type": "string",
+      "value": "[subscription().tenantId]"
+    },
+    "AZURE_SUBSCRIPTION_ID": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "AZURE_OPERATOR_CLIENT_ID": {
+      "type": "string",
+      "value": "[reference('lhh-deploy-identity').outputs.operatorClientId.value]"
+    }
+  }
+}
